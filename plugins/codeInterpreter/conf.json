@@ -1,0 +1,27 @@
+{
+  "version": "v1.0.0",
+  "auther": "zmlix",
+  "display": "Python代码解释器",
+  "name": "codeInterpreter",
+  "cmd": "",
+  "plugins": [
+    {
+      "type": "function",
+      "function": {
+        "name": "python",
+        "description": "当你觉得生成的回答中会包含python代码时,可以使用本插件来执行代码。如果执行的函数需要用户输入参数，请向用户索取所有必要的参数值，或者你自己给出所有合理的参数，保证函数能正确的执行，这非常重要！请注意Python代码的缩进问题,如果缩进出现问题,会导致Python代码执行出错。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "description": "一段完整的Python代码,请注意Python代码的缩进问题,如果缩进出现问题,会导致Python代码执行出错。"
+            }
+          },
+          "required": ["code"]
+        }
+      }
+    }
+  ],
+  "options": []
+}

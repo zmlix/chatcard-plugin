@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -442,13 +443,44 @@ func main() {
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
-	WebPort, ok := os.LookupEnv("WEB_PORT")
+	WEB_PORT, ok := os.LookupEnv("WEB_PORT")
 	if !ok {
-		WebPort = "5006"
+		WEB_PORT = "5006"
 	}
-	Grpc_PORT, ok := os.LookupEnv("GRPC_PORT")
+	GRPC_PORT, ok := os.LookupEnv("GRPC_PORT")
 	if !ok {
-		Grpc_PORT = "8888"
+		GRPC_PORT = "8888"
+	}
+	PROXY_PORT, ok := os.LookupEnv("PROXY_PORT")
+	if !ok {
+		PROXY_PORT = "5005"
+	}
+
+	if runtime.GOOS == "linux" {
+		fmt.Println("Running in linux")
+		go func() {
+			cmd := exec.Command("./grpcwebproxy",
+				"--backend_addr=localhost:"+GRPC_PORT,
+				"--run_tls_server=false",
+				"--allow_all_origins",
+				"--server_http_debug_port="+PROXY_PORT,
+			)
+			out, err := cmd.Output()
+			log.Println(string(out))
+			if err != nil {
+				log.Fatalln(err)
+			}
+		}()
+	} else if runtime.GOOS == "windows" {
+		fmt.Println("Running in windows")
+		go func() {
+			exec.Command("grpcwebproxy.exe",
+				"--backend_addr=localhost:"+GRPC_PORT,
+				"--run_tls_server=false",
+				"--allow_all_origins",
+				"--server_http_debug_port="+PROXY_PORT,
+			)
+		}()
 	}
 
 	for _, dir := range []string{"../plugins", "../files"} {
@@ -460,8 +492,8 @@ func main() {
 		}
 	}
 
-	go download(WebPort, "../files")
-	l, _ := net.Listen("tcp", ":"+Grpc_PORT)
+	go download(WEB_PORT, "../files")
+	l, _ := net.Listen("tcp", ":"+GRPC_PORT)
 	server := grpc.NewServer()
 	plugin.RegisterPluginServiceServer(server, &PluginServer{})
 	server.Serve(l)
