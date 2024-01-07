@@ -474,12 +474,17 @@ func main() {
 	} else if runtime.GOOS == "windows" {
 		fmt.Println("Running in windows")
 		go func() {
-			exec.Command("grpcwebproxy.exe",
+			cmd := exec.Command("./grpcwebproxy.exe",
 				"--backend_addr=localhost:"+GRPC_PORT,
 				"--run_tls_server=false",
 				"--allow_all_origins",
 				"--server_http_debug_port="+PROXY_PORT,
 			)
+			out, err := cmd.Output()
+			log.Println(string(out))
+			if err != nil {
+				log.Fatalln(err)
+			}
 		}()
 	}
 
