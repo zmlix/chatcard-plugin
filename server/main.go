@@ -115,7 +115,7 @@ func (*PluginServer) Connect(ctx context.Context, req *plugin.ConnectRequest) (*
 			Status:    plugin.Status_SUCCESS,
 			Plugins:   []*plugin.Plugin{},
 			Directory: string(directory),
-			Web:       "http://127.0.0.1:" + os.Getenv("WEB_PORT"),
+			Web:       os.Getenv("WEB_HTTP") + ":" + os.Getenv("WEB_PORT"),
 		}
 		return &res, nil
 	}
@@ -152,7 +152,7 @@ func (*PluginServer) Connect(ctx context.Context, req *plugin.ConnectRequest) (*
 			Status:    plugin.Status_SUCCESS,
 			Plugins:   Plugins,
 			Directory: string(directory),
-			Web:       "http://127.0.0.1:" + os.Getenv("WEB_PORT"),
+			Web:       os.Getenv("WEB_HTTP") + ":" + os.Getenv("WEB_PORT"),
 		}
 	}
 	return &res, nil
