@@ -112,7 +112,7 @@ func (*PluginServer) Connect(ctx context.Context, req *plugin.ConnectRequest) (*
 		os.MkdirAll(plugins, 0755)
 		res = plugin.ConnectResponse{
 			Status:    plugin.Status_SUCCESS,
-			Plugins:   nil,
+			Plugins:   []*plugin.Plugin{},
 			Directory: string(directory),
 			Web:       "http://127.0.0.1:" + os.Getenv("WEB_PORT"),
 		}
@@ -203,24 +203,26 @@ func RunPlugin(file string, call string, arguments string, conf *PluginConfigure
 		return
 	}
 
-	server.Send(&plugin.CallResponse{
-		Status:   plugin.Status_PROCESS,
-		Response: CallResponseJson{Log: "执行插件的命令:" + conf.Cmd, Level: 2, Finish: false}.Json(),
-	})
-	cmd := exec.Command(conf.Cmd)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
+	if conf.Cmd != "" {
 		server.Send(&plugin.CallResponse{
 			Status:   plugin.Status_PROCESS,
-			Response: CallResponseJson{Log: err.Error(), Level: -2, Finish: true}.Json(),
+			Response: CallResponseJson{Log: "执行插件的命令:" + conf.Cmd, Level: 2, Finish: false}.Json(),
 		})
-		wg.Done()
-		return
+		cmd := exec.Command(conf.Cmd)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			server.Send(&plugin.CallResponse{
+				Status:   plugin.Status_PROCESS,
+				Response: CallResponseJson{Log: err.Error(), Level: -2, Finish: true}.Json(),
+			})
+			wg.Done()
+			return
+		}
+		server.Send(&plugin.CallResponse{
+			Status:   plugin.Status_PROCESS,
+			Response: CallResponseJson{Log: string(out), Level: 3, Finish: false}.Json(),
+		})
 	}
-	server.Send(&plugin.CallResponse{
-		Status:   plugin.Status_PROCESS,
-		Response: CallResponseJson{Log: string(out), Level: 3, Finish: false}.Json(),
-	})
 
 	server.Send(&plugin.CallResponse{
 		Status:   plugin.Status_PROCESS,
@@ -228,8 +230,8 @@ func RunPlugin(file string, call string, arguments string, conf *PluginConfigure
 	})
 	arguments_base64 := base64.StdEncoding.EncodeToString([]byte(allCallArguments.Function.Arguments))
 	fmt.Println(os.Getenv("PYTHON"), "-u", conf.Name+".py", "--call", call, "--arguments", arguments_base64)
-	cmd = exec.Command(os.Getenv("PYTHON"), "-u", conf.Name+".py", "--call", call, "--arguments", arguments_base64)
-	out, err = cmd.Output()
+	cmd := exec.Command(os.Getenv("PYTHON"), "-u", conf.Name+".py", "--call", call, "--arguments", arguments_base64)
+	out, err := cmd.Output()
 	// fmt.Println(string(out))
 	if err != nil {
 		server.Send(&plugin.CallResponse{
