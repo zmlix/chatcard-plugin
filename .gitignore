@@ -1,5 +1,6 @@
 /plugins/*
 !/plugins/codeInterpreter
+/plugins/codeInterpreter/venv
 /files
 /client/client
 go.sum
