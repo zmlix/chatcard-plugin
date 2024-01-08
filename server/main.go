@@ -210,7 +210,12 @@ func RunPlugin(file string, call string, arguments string, conf *PluginConfigure
 	})
 
 	arguments_base64 := base64.StdEncoding.EncodeToString([]byte(allCallArguments.Function.Arguments))
-	confCmd := fmt.Sprintf("%v > %v.log 2>&1", conf.Cmd, conf.Name)
+	var confCmd string
+	if conf.Cmd == "" {
+		confCmd = ""
+	} else {
+		confCmd = fmt.Sprintf("%v > %v.log 2>&1", conf.Cmd, conf.Name)
+	}
 	pythonCmd := fmt.Sprintln(os.Getenv("PYTHON"), "-u", conf.Name+".py", "--call", call, "--arguments", arguments_base64)
 	cmd := exec.Command(os.Getenv("PLUGIN_SHELL"), os.Getenv("PLUGIN_SHELL_ARGS"), fmt.Sprintf("%v;%v", confCmd, pythonCmd))
 	fmt.Println(confCmd, pythonCmd)
@@ -488,7 +493,7 @@ func main() {
 		fmt.Println("Running in windows, port ", PROXY_PORT)
 		_, ok := os.LookupEnv("PLUGIN_SHELL")
 		if !ok {
-			os.Setenv("PLUGIN_SHELL", "cmd")
+			os.Setenv("PLUGIN_SHELL", "powershell")
 		}
 		_, ok = os.LookupEnv("PLUGIN_SHELL_ARGS")
 		if !ok {
