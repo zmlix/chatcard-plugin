@@ -204,34 +204,17 @@ func RunPlugin(file string, call string, arguments string, conf *PluginConfigure
 		return
 	}
 
-	if conf.Cmd != "" {
-		server.Send(&plugin.CallResponse{
-			Status:   plugin.Status_PROCESS,
-			Response: CallResponseJson{Log: "执行插件的命令:" + conf.Cmd, Level: 2, Finish: false}.Json(),
-		})
-		cmd := exec.Command(conf.Cmd)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			server.Send(&plugin.CallResponse{
-				Status:   plugin.Status_PROCESS,
-				Response: CallResponseJson{Log: err.Error(), Level: -2, Finish: true}.Json(),
-			})
-			wg.Done()
-			return
-		}
-		server.Send(&plugin.CallResponse{
-			Status:   plugin.Status_PROCESS,
-			Response: CallResponseJson{Log: string(out), Level: 3, Finish: false}.Json(),
-		})
-	}
-
 	server.Send(&plugin.CallResponse{
 		Status:   plugin.Status_PROCESS,
 		Response: CallResponseJson{Log: "执行插件的" + call + "方法", Level: 2, Finish: false}.Json(),
 	})
+
 	arguments_base64 := base64.StdEncoding.EncodeToString([]byte(allCallArguments.Function.Arguments))
-	fmt.Println(os.Getenv("PYTHON"), "-u", conf.Name+".py", "--call", call, "--arguments", arguments_base64)
-	cmd := exec.Command(os.Getenv("PYTHON"), "-u", conf.Name+".py", "--call", call, "--arguments", arguments_base64)
+	confCmd := fmt.Sprintf("%v > %v.log 2>&1", conf.Cmd, conf.Name)
+	pythonCmd := fmt.Sprintln(os.Getenv("PYTHON"), "-u", conf.Name+".py", "--call", call, "--arguments", arguments_base64)
+	cmd := exec.Command(os.Getenv("PLUGIN_SHELL"), os.Getenv("PLUGIN_SHELL_ARGS"), fmt.Sprintf("%v;%v", confCmd, pythonCmd))
+	fmt.Println(confCmd, pythonCmd)
+
 	out, err := cmd.Output()
 	// fmt.Println(string(out))
 	if err != nil {
@@ -242,6 +225,24 @@ func RunPlugin(file string, call string, arguments string, conf *PluginConfigure
 		wg.Done()
 		return
 	}
+
+	server.Send(&plugin.CallResponse{
+		Status:   plugin.Status_PROCESS,
+		Response: CallResponseJson{Log: "执行插件的前置命令:" + conf.Cmd, Level: 2, Finish: false}.Json(),
+	})
+	cmdLog, err := os.ReadFile(conf.Name + ".log")
+	if err != nil {
+		server.Send(&plugin.CallResponse{
+			Status:   plugin.Status_PROCESS,
+			Response: CallResponseJson{Log: err.Error(), Level: -2, Finish: true}.Json(),
+		})
+		wg.Done()
+		return
+	}
+	server.Send(&plugin.CallResponse{
+		Status:   plugin.Status_PROCESS,
+		Response: CallResponseJson{Log: string(cmdLog), Level: 3, Finish: false}.Json(),
+	})
 
 	output := []Output{}
 	err = json.Unmarshal(out, &output)
@@ -455,13 +456,25 @@ func main() {
 	if !ok {
 		PROXY_PORT = "5005"
 	}
+	PROXY_TLS, ok := os.LookupEnv("PROXY_TLS")
+	if !ok {
+		PROXY_TLS = "false"
+	}
 
 	if runtime.GOOS == "linux" {
-		fmt.Println("Running in linux")
+		fmt.Println("Running in linux, port ", PROXY_PORT)
+		_, ok := os.LookupEnv("PLUGIN_SHELL")
+		if !ok {
+			os.Setenv("PLUGIN_SHELL", "bash")
+		}
+		_, ok = os.LookupEnv("PLUGIN_SHELL_ARGS")
+		if !ok {
+			os.Setenv("PLUGIN_SHELL_ARGS", "-c")
+		}
 		go func() {
 			cmd := exec.Command("./grpcwebproxy",
 				"--backend_addr=localhost:"+GRPC_PORT,
-				"--run_tls_server=false",
+				"--run_tls_server="+PROXY_TLS,
 				"--allow_all_origins",
 				"--server_http_debug_port="+PROXY_PORT,
 			)
@@ -472,11 +485,19 @@ func main() {
 			}
 		}()
 	} else if runtime.GOOS == "windows" {
-		fmt.Println("Running in windows")
+		fmt.Println("Running in windows, port ", PROXY_PORT)
+		_, ok := os.LookupEnv("PLUGIN_SHELL")
+		if !ok {
+			os.Setenv("PLUGIN_SHELL", "cmd")
+		}
+		_, ok = os.LookupEnv("PLUGIN_SHELL_ARGS")
+		if !ok {
+			os.Setenv("PLUGIN_SHELL_ARGS", "/c")
+		}
 		go func() {
 			cmd := exec.Command("./grpcwebproxy.exe",
 				"--backend_addr=localhost:"+GRPC_PORT,
-				"--run_tls_server=false",
+				"--run_tls_server="+PROXY_TLS,
 				"--allow_all_origins",
 				"--server_http_debug_port="+PROXY_PORT,
 			)
