@@ -218,7 +218,7 @@ func RunPlugin(file string, call string, arguments string, conf *PluginConfigure
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(CMD_TIMEOUT)*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Getenv("PLUGIN_SHELL"), os.Getenv("PLUGIN_SHELL_ARGS"), conf.Cmd)
+	cmd := exec.CommandContext(ctx, os.Getenv("PLUGIN_SHELL"), os.Getenv("PLUGIN_SHELL_ARGS"), fmt.Sprintf("%v", conf.Cmd))
 	cmdLog, err := cmd.Output()
 	if err != nil {
 		server.Send(&plugin.CallResponse{
@@ -256,9 +256,9 @@ func RunPlugin(file string, call string, arguments string, conf *PluginConfigure
 	ctx, cancel = context.WithTimeout(context.Background(), time.Duration(RUN_TIMEOUT)*time.Second)
 	defer cancel()
 	arguments_base64 := base64.StdEncoding.EncodeToString([]byte(allCallArguments.Function.Arguments))
-	pythonCmd := fmt.Sprintln(os.Getenv("PYTHON"), "-u", conf.Name+".py", "--call", call, "--arguments", arguments_base64)
-	cmd = exec.CommandContext(ctx, os.Getenv("PLUGIN_SHELL"), os.Getenv("PLUGIN_SHELL_ARGS"), fmt.Sprintf("%v %v", confCmd, pythonCmd))
-	fmt.Println(confCmd, pythonCmd)
+	pythonCmd := fmt.Sprintf("%v %v %v %v %v %v %v", os.Getenv("PYTHON"), "-u", conf.Name+".py", "--call", call, "--arguments", arguments_base64)
+	cmd = exec.CommandContext(ctx, os.Getenv("PLUGIN_SHELL"), os.Getenv("PLUGIN_SHELL_ARGS"), fmt.Sprintf("%v%v", confCmd, pythonCmd))
+	fmt.Println(cmd.Path + " " + strings.Join(cmd.Args[1:], " "))
 
 	out, err := cmd.StdoutPipe()
 	if err != nil {
@@ -507,6 +507,10 @@ func main() {
 	if !ok {
 		PROXY_TLS = "false"
 	}
+	HTTP_MAX_TIMEOUT, ok := os.LookupEnv("HTTP_MAX_TIMEOUT")
+	if !ok {
+		HTTP_MAX_TIMEOUT = "3600s"
+	}
 
 	if runtime.GOOS == "linux" {
 		fmt.Println("Running in linux, port ", PROXY_PORT)
@@ -524,6 +528,8 @@ func main() {
 				"--run_tls_server="+PROXY_TLS,
 				"--allow_all_origins",
 				"--server_http_debug_port="+PROXY_PORT,
+				"--server_http_max_write_timeout="+HTTP_MAX_TIMEOUT,
+				"--server_http_max_read_timeout="+HTTP_MAX_TIMEOUT,
 			)
 			out, err := cmd.Output()
 			log.Println(string(out))
@@ -547,6 +553,8 @@ func main() {
 				"--run_tls_server="+PROXY_TLS,
 				"--allow_all_origins",
 				"--server_http_debug_port="+PROXY_PORT,
+				"--server_http_max_write_timeout="+HTTP_MAX_TIMEOUT,
+				"--server_http_max_read_timeout="+HTTP_MAX_TIMEOUT,
 			)
 			out, err := cmd.Output()
 			log.Println(string(out))
