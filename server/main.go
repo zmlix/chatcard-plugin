@@ -15,6 +15,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,8 @@ import (
 	"github.com/joho/godotenv"
 	"google.golang.org/grpc"
 )
+
+var BASE_PATH string
 
 type PluginServer struct {
 	plugin.UnimplementedPluginServiceServer
@@ -188,7 +191,7 @@ type Output struct {
 }
 
 func RunPlugin(file string, call string, arguments string, conf *PluginConfigure, server plugin.PluginService_CallServer, wg *sync.WaitGroup) {
-	fmt.Println("RunPlugin", file, call, arguments)
+	// fmt.Println("RunPlugin", file, call, arguments)
 	os.Chdir(path.Join("../plugins", conf.Name))
 	defer func() {
 		os.Chdir(path.Join("../../", "server"))
@@ -206,36 +209,17 @@ func RunPlugin(file string, call string, arguments string, conf *PluginConfigure
 
 	server.Send(&plugin.CallResponse{
 		Status:   plugin.Status_PROCESS,
-		Response: CallResponseJson{Log: "执行插件的" + call + "方法", Level: 2, Finish: false}.Json(),
-	})
-
-	arguments_base64 := base64.StdEncoding.EncodeToString([]byte(allCallArguments.Function.Arguments))
-	var confCmd string
-	if conf.Cmd == "" {
-		confCmd = ""
-	} else {
-		confCmd = fmt.Sprintf("%v > %v.log 2>&1", conf.Cmd, conf.Name)
-	}
-	pythonCmd := fmt.Sprintln(os.Getenv("PYTHON"), "-u", conf.Name+".py", "--call", call, "--arguments", arguments_base64)
-	cmd := exec.Command(os.Getenv("PLUGIN_SHELL"), os.Getenv("PLUGIN_SHELL_ARGS"), fmt.Sprintf("%v;%v", confCmd, pythonCmd))
-	fmt.Println(confCmd, pythonCmd)
-
-	out, err := cmd.Output()
-	// fmt.Println(string(out))
-	if err != nil {
-		server.Send(&plugin.CallResponse{
-			Status:   plugin.Status_FAILED,
-			Response: CallResponseJson{Log: err.Error(), Level: -2, Finish: true}.Json(),
-		})
-		wg.Done()
-		return
-	}
-
-	server.Send(&plugin.CallResponse{
-		Status:   plugin.Status_PROCESS,
 		Response: CallResponseJson{Log: "执行插件的前置命令:" + conf.Cmd, Level: 2, Finish: false}.Json(),
 	})
-	cmdLog, err := os.ReadFile(conf.Name + ".log")
+	CMD_TIMEOUT, err := strconv.ParseInt(os.Getenv("CMD_TIMEOUT"), 10, 64)
+	if err != nil {
+		log.Println(err)
+		CMD_TIMEOUT = 10
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(CMD_TIMEOUT)*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Getenv("PLUGIN_SHELL"), os.Getenv("PLUGIN_SHELL_ARGS"), conf.Cmd)
+	cmdLog, err := cmd.Output()
 	if err != nil {
 		server.Send(&plugin.CallResponse{
 			Status:   plugin.Status_PROCESS,
@@ -249,9 +233,60 @@ func RunPlugin(file string, call string, arguments string, conf *PluginConfigure
 		Response: CallResponseJson{Log: string(cmdLog), Level: 3, Finish: false}.Json(),
 	})
 
-	output := []Output{}
-	err = json.Unmarshal(out, &output)
+	server.Send(&plugin.CallResponse{
+		Status:   plugin.Status_PROCESS,
+		Response: CallResponseJson{Log: "执行插件的" + call + "方法", Level: 2, Finish: false}.Json(),
+	})
+
+	var confCmd string
+	if conf.Cmd != "" {
+		cmds := strings.Split(conf.Cmd, ";")
+		for _, c := range cmds {
+			if c == "" {
+				continue
+			}
+			confCmd += fmt.Sprintf("%v >> %v.log 2>&1;", c, conf.Name)
+		}
+	}
+	RUN_TIMEOUT, err := strconv.ParseInt(os.Getenv("CMD_TIMEOUT"), 10, 64)
 	if err != nil {
+		log.Println(err)
+		RUN_TIMEOUT = 600
+	}
+	ctx, cancel = context.WithTimeout(context.Background(), time.Duration(RUN_TIMEOUT)*time.Second)
+	defer cancel()
+	arguments_base64 := base64.StdEncoding.EncodeToString([]byte(allCallArguments.Function.Arguments))
+	pythonCmd := fmt.Sprintln(os.Getenv("PYTHON"), "-u", conf.Name+".py", "--call", call, "--arguments", arguments_base64)
+	cmd = exec.CommandContext(ctx, os.Getenv("PLUGIN_SHELL"), os.Getenv("PLUGIN_SHELL_ARGS"), fmt.Sprintf("%v %v", confCmd, pythonCmd))
+	fmt.Println(confCmd, pythonCmd)
+
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		server.Send(&plugin.CallResponse{
+			Status:   plugin.Status_FAILED,
+			Response: CallResponseJson{Log: err.Error(), Level: -2, Finish: true}.Json(),
+		})
+		wg.Done()
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
+		server.Send(&plugin.CallResponse{
+			Status:   plugin.Status_FAILED,
+			Response: CallResponseJson{Log: err.Error(), Level: -2, Finish: true}.Json(),
+		})
+		wg.Done()
+		return
+	}
+
+	finished := make(chan error, 1)
+
+	go func() {
+		finished <- cmd.Wait()
+	}()
+
+	output := []Output{}
+	if err := json.NewDecoder(out).Decode(&output); err != nil {
 		server.Send(&plugin.CallResponse{
 			Status:   plugin.Status_FAILED,
 			Response: CallResponseJson{Log: err.Error(), Level: -3, Finish: true}.Json(),
@@ -273,7 +308,6 @@ func RunPlugin(file string, call string, arguments string, conf *PluginConfigure
 			})
 		}
 	}
-
 	server.Send(&plugin.CallResponse{
 		Status:   plugin.Status_SUCCESS,
 		Response: CallResponseJson{Log: "执行完成", Level: 4, Finish: true}.Json(),
@@ -285,6 +319,9 @@ func (*PluginServer) Call(req *plugin.CallRequest, server plugin.PluginService_C
 	wg := sync.WaitGroup{}
 	name := req.Name
 	call := req.Call
+	fmt.Println("BASE_PATH", BASE_PATH)
+	os.Chdir(BASE_PATH)
+
 	py := path.Join("../plugins", name, name+".py")
 	_, err := os.Stat(py)
 	if err != nil {
@@ -329,7 +366,6 @@ func (*PluginServer) Directory(ctx context.Context, req *plugin.DirectoryRequest
 	fmt.Println(">>>>>", event, paths)
 	var res plugin.DirectoryResponse
 	if event == "delete" {
-		fmt.Println("")
 		for _, file := range paths {
 			err := os.Remove(path.Join("../files", file))
 			if err != nil {
@@ -445,7 +481,13 @@ func download(portPtr, dirPtr string) {
 }
 
 func main() {
-	err := godotenv.Load()
+	BASE_PATH_, err := os.Getwd()
+	if err != nil {
+		log.Fatal(err)
+	}
+	BASE_PATH = BASE_PATH_
+	fmt.Println(BASE_PATH)
+	err = godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}

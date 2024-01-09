@@ -86,13 +86,8 @@ def getArgs():
 
 
 def run_python_code(code):
-    py_code = ""
-    try:
-        py_code = json.loads(code)["code"]
-    except:
-        py_code = code
     jk = JupyterKernel("../../files/codeInterpreter")
-    out = jk.execute_code(py_code)
+    out = jk.execute_code(code)
     jk.kernel_client.shutdown()
     print(out)
 
