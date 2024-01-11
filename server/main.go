@@ -511,11 +511,10 @@ func download(portPtr, dirPtr string) {
 }
 
 func main() {
-	BASE_PATH_, err := os.Getwd()
+	BASE_PATH, err := os.Getwd()
 	if err != nil {
 		log.Fatal(err)
 	}
-	BASE_PATH = BASE_PATH_
 	fmt.Println(BASE_PATH)
 	err = godotenv.Load()
 	if err != nil {

@@ -3,7 +3,7 @@
   "auther": "zmlix",
   "display": "Python代码解释器",
   "name": "codeInterpreter",
-  "cmd": ". ./venv/bin/activate;",
+  "cmd": "",
   "plugins": [
     {
       "type": "function",
