@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -100,7 +99,9 @@ func findParentNode(tree *TreeNode, path string) (*TreeNode, error) {
 }
 
 func (*PluginServer) Connect(ctx context.Context, req *plugin.ConnectRequest) (*plugin.ConnectResponse, error) {
-	filesPath := path.Join(BASE_PATH, "../files")
+	filesPath := filepath.Join(BASE_PATH, "../files")
+	pluginsPath := filepath.Join(BASE_PATH, "../plugins")
+	fmt.Println(filesPath, pluginsPath)
 	_, err := os.Stat(filesPath)
 	if err != nil {
 		log.Println(err)
@@ -110,7 +111,6 @@ func (*PluginServer) Connect(ctx context.Context, req *plugin.ConnectRequest) (*
 	directory, _ := json.Marshal(tree)
 	fmt.Println(string(directory))
 	fmt.Println("connect...")
-	pluginsPath := path.Join(BASE_PATH, "../plugins")
 	var res plugin.ConnectResponse
 	_, err = os.Stat(pluginsPath)
 	if err != nil {
@@ -127,7 +127,7 @@ func (*PluginServer) Connect(ctx context.Context, req *plugin.ConnectRequest) (*
 	pluginsDir, _ := os.ReadDir(pluginsPath)
 	Plugins := []*plugin.Plugin{}
 	for _, p := range pluginsDir {
-		conf_, _ := os.Open(path.Join(pluginsPath, p.Name(), "conf.json"))
+		conf_, _ := os.Open(filepath.Join(pluginsPath, p.Name(), "conf.json"))
 		conf := &PluginConfigure{}
 		err := json.NewDecoder(conf_).Decode(conf)
 		if err != nil {
@@ -194,9 +194,10 @@ type Output struct {
 
 func RunPlugin(file string, call string, arguments string, conf *PluginConfigure, server plugin.PluginService_CallServer, wg *sync.WaitGroup) {
 	// fmt.Println("RunPlugin", file, call, arguments)
-	os.Chdir(path.Join("../plugins", conf.Name))
+	pluginsPath := filepath.Join(BASE_PATH, "../plugins")
+	os.Chdir(filepath.Join(pluginsPath, conf.Name))
 	defer func() {
-		os.Chdir(path.Join("../../", "server"))
+		os.Chdir(BASE_PATH)
 	}()
 	var allCallArguments CallArguments
 	err := json.Unmarshal([]byte(arguments), &allCallArguments)
@@ -351,7 +352,7 @@ func (*PluginServer) Call(req *plugin.CallRequest, server plugin.PluginService_C
 	fmt.Println("BASE_PATH", BASE_PATH)
 	os.Chdir(BASE_PATH)
 
-	py := path.Join(BASE_PATH, "../plugins", name, name+".py")
+	py := filepath.Join(BASE_PATH, "../plugins", name, name+".py")
 	_, err := os.Stat(py)
 	if err != nil {
 		server.Send(&plugin.CallResponse{
@@ -360,7 +361,7 @@ func (*PluginServer) Call(req *plugin.CallRequest, server plugin.PluginService_C
 		})
 		return nil
 	}
-	conf_, err := os.Open(path.Join(BASE_PATH, "../plugins", name, "conf.json"))
+	conf_, err := os.Open(filepath.Join(BASE_PATH, "../plugins", name, "conf.json"))
 	if err != nil {
 		server.Send(&plugin.CallResponse{
 			Status:   plugin.Status_FAILED,
@@ -393,11 +394,11 @@ func (*PluginServer) Directory(ctx context.Context, req *plugin.DirectoryRequest
 	event := req.Event
 	paths := req.Paths
 	fmt.Println(">>>>>", event, paths)
-	filesPath := path.Join(BASE_PATH, "../files")
+	filesPath := filepath.Join(BASE_PATH, "../files")
 	var res plugin.DirectoryResponse
 	if event == "delete" {
 		for _, file := range paths {
-			err := os.Remove(path.Join(filesPath, file))
+			err := os.Remove(filepath.Join(filesPath, file))
 			if err != nil {
 				log.Println(err)
 				tree := getDirStructure(filesPath)
@@ -422,7 +423,7 @@ func (*PluginServer) Directory(ctx context.Context, req *plugin.DirectoryRequest
 func download(portPtr, dirPtr string) {
 	http.HandleFunc("/download/", func(w http.ResponseWriter, r *http.Request) {
 		filename := r.URL.Path[len("/download/"):]
-		filepath := path.Join(dirPtr, filename)
+		filepath := filepath.Join(dirPtr, filename)
 		startTime := time.Now()
 		log.Printf("Received request for %s from %s at %s", filename, r.RemoteAddr, time.Now().Format("2006-01-02 15:04:05"))
 
@@ -469,7 +470,7 @@ func download(portPtr, dirPtr string) {
 			if dir == "files" {
 				dir = ""
 			}
-			uploadDir := path.Join(dirPtr, dir)
+			uploadDir := filepath.Join(dirPtr, dir)
 			log.Println(uploadDir)
 			if _, err := os.Stat(uploadDir); os.IsNotExist(err) {
 				log.Println(err)
@@ -482,7 +483,7 @@ func download(portPtr, dirPtr string) {
 				w.Write(jsonData)
 				return
 			}
-			filePath := path.Join(uploadDir, handler.Filename)
+			filePath := filepath.Join(uploadDir, handler.Filename)
 			err = os.WriteFile(filePath, data, 0644)
 			if err != nil {
 				log.Println(err)
@@ -511,7 +512,8 @@ func download(portPtr, dirPtr string) {
 }
 
 func main() {
-	BASE_PATH, err := os.Getwd()
+	var err error
+	BASE_PATH, err = os.Getwd()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -593,8 +595,8 @@ func main() {
 		}()
 	}
 
-	filesPath := path.Join(BASE_PATH, "../files")
-	pluginsPath := path.Join(BASE_PATH, "../plugins")
+	filesPath := filepath.Join(BASE_PATH, "../files")
+	pluginsPath := filepath.Join(BASE_PATH, "../plugins")
 
 	for _, dir := range []string{pluginsPath, filesPath} {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
