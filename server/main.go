@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -99,21 +100,22 @@ func findParentNode(tree *TreeNode, path string) (*TreeNode, error) {
 }
 
 func (*PluginServer) Connect(ctx context.Context, req *plugin.ConnectRequest) (*plugin.ConnectResponse, error) {
-	_, err := os.Stat("../files")
+	filesPath := path.Join(BASE_PATH, "../files")
+	_, err := os.Stat(filesPath)
 	if err != nil {
 		log.Println(err)
-		os.MkdirAll("../files", 0755)
+		os.MkdirAll(filesPath, 0755)
 	}
-	tree := getDirStructure("../files")
+	tree := getDirStructure(filesPath)
 	directory, _ := json.Marshal(tree)
 	fmt.Println(string(directory))
 	fmt.Println("connect...")
-	plugins := path.Join("../plugins")
+	pluginsPath := path.Join(BASE_PATH, "../plugins")
 	var res plugin.ConnectResponse
-	_, err = os.Stat(plugins)
+	_, err = os.Stat(pluginsPath)
 	if err != nil {
 		log.Println(err)
-		os.MkdirAll(plugins, 0755)
+		os.MkdirAll(pluginsPath, 0755)
 		res = plugin.ConnectResponse{
 			Status:    plugin.Status_SUCCESS,
 			Plugins:   []*plugin.Plugin{},
@@ -122,10 +124,10 @@ func (*PluginServer) Connect(ctx context.Context, req *plugin.ConnectRequest) (*
 		}
 		return &res, nil
 	}
-	pluginsDir, _ := os.ReadDir(plugins)
+	pluginsDir, _ := os.ReadDir(pluginsPath)
 	Plugins := []*plugin.Plugin{}
 	for _, p := range pluginsDir {
-		conf_, _ := os.Open(path.Join(plugins, p.Name(), "conf.json"))
+		conf_, _ := os.Open(path.Join(pluginsPath, p.Name(), "conf.json"))
 		conf := &PluginConfigure{}
 		err := json.NewDecoder(conf_).Decode(conf)
 		if err != nil {
@@ -248,7 +250,7 @@ func RunPlugin(file string, call string, arguments string, conf *PluginConfigure
 			confCmd += fmt.Sprintf("%v >> %v.log 2>&1;", c, conf.Name)
 		}
 	}
-	RUN_TIMEOUT, err := strconv.ParseInt(os.Getenv("CMD_TIMEOUT"), 10, 64)
+	RUN_TIMEOUT, err := strconv.ParseInt(os.Getenv("RUN_TIMEOUT"), 10, 64)
 	if err != nil {
 		log.Println(err)
 		RUN_TIMEOUT = 600
@@ -279,40 +281,67 @@ func RunPlugin(file string, call string, arguments string, conf *PluginConfigure
 		return
 	}
 
-	finished := make(chan error, 1)
+	success := make(chan error, 1)
 
+	fmt.Println("start")
 	go func() {
-		finished <- cmd.Wait()
+		output := Output{}
+		fmt.Println("decoding...")
+		dec := json.NewDecoder(out)
+		for dec.More() {
+			if err := dec.Decode(&output); err != nil {
+				fmt.Println("decoding failed:", err)
+				server.Send(&plugin.CallResponse{
+					Status:   plugin.Status_FAILED,
+					Response: CallResponseJson{Log: err.Error(), Level: -3, Finish: true}.Json(),
+				})
+				wg.Done()
+				success <- err
+				return
+			}
+			// fmt.Println(output)
+			if output.Type == "stdout" || output.Type == "error" || output.Type == "text/plain" {
+				server.Send(&plugin.CallResponse{
+					Status:   plugin.Status_PROCESS,
+					Response: CallResponseJson{Message: output.Content, Level: 3, Finish: false}.Json(),
+				})
+			} else if output.Type == "image/png" || output.Type == "image/jpeg" {
+				server.Send(&plugin.CallResponse{
+					Status:   plugin.Status_PROCESS,
+					Response: CallResponseJson{Message: output.Content, Log: "[" + output.Type + "]", Level: 3, Finish: false}.Json(),
+				})
+			}
+		}
+		success <- nil
 	}()
 
-	output := []Output{}
-	if err := json.NewDecoder(out).Decode(&output); err != nil {
-		server.Send(&plugin.CallResponse{
-			Status:   plugin.Status_FAILED,
-			Response: CallResponseJson{Log: err.Error(), Level: -3, Finish: true}.Json(),
-		})
-		wg.Done()
-		return
-	}
-
-	for _, msg := range output {
-		if msg.Type == "stdout" || msg.Type == "error" || msg.Type == "text/plain" {
+	fmt.Println("wait...")
+	if err := cmd.Wait(); err != nil {
+		fmt.Println("failed:", ctx, err)
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			server.Send(&plugin.CallResponse{
-				Status:   plugin.Status_PROCESS,
-				Response: CallResponseJson{Message: msg.Content, Level: 3, Finish: false}.Json(),
+				Status:   plugin.Status_FAILED,
+				Response: CallResponseJson{Log: fmt.Sprintf("执行超时(%vs): %v %v", os.Getenv("RUN_TIMEOUT"), ctx.Err().Error(), err.Error()), Level: -3, Finish: true}.Json(),
 			})
-		} else if msg.Type == "image/png" || msg.Type == "image/jpeg" {
+			wg.Done()
+			return
+		} else {
 			server.Send(&plugin.CallResponse{
-				Status:   plugin.Status_PROCESS,
-				Response: CallResponseJson{Message: msg.Content, Log: "[" + msg.Type + "]", Level: 3, Finish: false}.Json(),
+				Status:   plugin.Status_FAILED,
+				Response: CallResponseJson{Log: err.Error(), Level: -3, Finish: true}.Json(),
 			})
+			wg.Done()
+			return
 		}
 	}
-	server.Send(&plugin.CallResponse{
-		Status:   plugin.Status_SUCCESS,
-		Response: CallResponseJson{Log: "执行完成", Level: 4, Finish: true}.Json(),
-	})
-	wg.Done()
+	if err := <-success; err == nil {
+		fmt.Println("success")
+		server.Send(&plugin.CallResponse{
+			Status:   plugin.Status_SUCCESS,
+			Response: CallResponseJson{Log: "执行完成", Level: 4, Finish: true}.Json(),
+		})
+		wg.Done()
+	}
 }
 
 func (*PluginServer) Call(req *plugin.CallRequest, server plugin.PluginService_CallServer) error {
@@ -322,7 +351,7 @@ func (*PluginServer) Call(req *plugin.CallRequest, server plugin.PluginService_C
 	fmt.Println("BASE_PATH", BASE_PATH)
 	os.Chdir(BASE_PATH)
 
-	py := path.Join("../plugins", name, name+".py")
+	py := path.Join(BASE_PATH, "../plugins", name, name+".py")
 	_, err := os.Stat(py)
 	if err != nil {
 		server.Send(&plugin.CallResponse{
@@ -331,7 +360,7 @@ func (*PluginServer) Call(req *plugin.CallRequest, server plugin.PluginService_C
 		})
 		return nil
 	}
-	conf_, err := os.Open(path.Join(path.Join("../plugins", name, "conf.json")))
+	conf_, err := os.Open(path.Join(BASE_PATH, "../plugins", name, "conf.json"))
 	if err != nil {
 		server.Send(&plugin.CallResponse{
 			Status:   plugin.Status_FAILED,
@@ -353,8 +382,8 @@ func (*PluginServer) Call(req *plugin.CallRequest, server plugin.PluginService_C
 		Status:   plugin.Status_PROCESS,
 		Response: CallResponseJson{Log: "找到插件" + name, Level: 2, Finish: false}.Json(),
 	})
-	wg.Add(1)
 
+	wg.Add(1)
 	go RunPlugin(py, call, *req.Arguments, conf, server, &wg)
 	wg.Wait()
 	return nil
@@ -364,13 +393,14 @@ func (*PluginServer) Directory(ctx context.Context, req *plugin.DirectoryRequest
 	event := req.Event
 	paths := req.Paths
 	fmt.Println(">>>>>", event, paths)
+	filesPath := path.Join(BASE_PATH, "../files")
 	var res plugin.DirectoryResponse
 	if event == "delete" {
 		for _, file := range paths {
-			err := os.Remove(path.Join("../files", file))
+			err := os.Remove(path.Join(filesPath, file))
 			if err != nil {
 				log.Println(err)
-				tree := getDirStructure("../files")
+				tree := getDirStructure(filesPath)
 				directory, _ := json.Marshal(tree)
 				res = plugin.DirectoryResponse{
 					Status:    plugin.Status_FAILED,
@@ -380,7 +410,7 @@ func (*PluginServer) Directory(ctx context.Context, req *plugin.DirectoryRequest
 			}
 		}
 	}
-	tree := getDirStructure("../files")
+	tree := getDirStructure(filesPath)
 	directory, _ := json.Marshal(tree)
 	res = plugin.DirectoryResponse{
 		Status:    plugin.Status_SUCCESS,
@@ -439,7 +469,7 @@ func download(portPtr, dirPtr string) {
 			if dir == "files" {
 				dir = ""
 			}
-			uploadDir := path.Join("../files", dir)
+			uploadDir := path.Join(dirPtr, dir)
 			log.Println(uploadDir)
 			if _, err := os.Stat(uploadDir); os.IsNotExist(err) {
 				log.Println(err)
@@ -564,7 +594,10 @@ func main() {
 		}()
 	}
 
-	for _, dir := range []string{"../plugins", "../files"} {
+	filesPath := path.Join(BASE_PATH, "../files")
+	pluginsPath := path.Join(BASE_PATH, "../plugins")
+
+	for _, dir := range []string{pluginsPath, filesPath} {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			err = os.Mkdir(dir, 0755)
 			if err != nil {
@@ -573,7 +606,7 @@ func main() {
 		}
 	}
 
-	go download(WEB_PORT, "../files")
+	go download(WEB_PORT, filesPath)
 	l, _ := net.Listen("tcp", ":"+GRPC_PORT)
 	server := grpc.NewServer()
 	plugin.RegisterPluginServiceServer(server, &PluginServer{})
